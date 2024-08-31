@@ -440,6 +440,9 @@ func (p *Parser) prefixParseFns(tokenType TokenType) func() Expression {
 		return p.parseArrayLiteral
 	case TOKEN_TRUE, TOKEN_FALSE:
 		return p.parseBoolean
+	case TOKEN_FUNC:
+		return func() Expression { return p.parseFunctionLiteral() } // 包装返回值
+		// return p.parseFunctionLiteral // 添加对匿名函数的解析
 	default:
 		return nil
 	}
@@ -1423,8 +1426,21 @@ func main() {
 		// {"sum = func(a, b) { return a + b }; sum(3, 4)", 7.0},
 		// {"max = func(a, b) { if a > b { return a } return b }; max(10, 20)", 20.0},
 		// {"merge = func(a, b) { return a + b }; merge([1, 2], [3, 4])", []interface{}{1.0, 2.0, 3.0, 4.0}},
-		{"result = [] len(result)", 0.0},
-		{"map = func(arr, fn) { result = [] ; i = 0; while i < len(arr) { result = append(result, fn(arr[i])); i = i + 1 }; return result }; map([1, 2, 3], func(x) { return x * 2 })", []interface{}{2.0, 4.0, 6.0}},
+		// {"result = [] len(result)", 0.0},
+		// {"test = func(arr) { print(arr) }; test([1,2,3])", nil},
+		{`
+		map = func(arr, fn) { 
+			result = [] ; 
+			i = 0; 
+			while i < len(arr) { 
+				result = append(result, fn(arr[i])); 
+				i = i + 1 
+			}; 
+			return result 
+		}; 
+		map([1, 2, 3], func(x) { 
+			return x * 2 
+		})`, []interface{}{2.0, 4.0, 6.0}},
 		// {"filter = func(arr, fn) { result = [] ; for i = 0; i < len(arr); i++ { if fn(arr[i]) { result = append(result, arr[i]) } }; return result }; filter([1, 2, 3, 4], func(x) { return x % 2 == 0 })", []interface{}{2.0, 4.0}},
 		// {"reduce = func(arr, fn, acc) { for i = 0; i < len(arr); i++ { acc = fn(acc, arr[i]) }; return acc }; reduce([1, 2, 3], func(acc, x) { return acc + x }, 0)", 6.0},
 		// {"fibonacci = func(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(10)", 55.0},
@@ -1455,6 +1471,23 @@ func main() {
 			default:
 				return nil
 			}
+		}
+		evaluator.env["append"] = func(args ...interface{}) interface{} {
+			if len(args) < 2 {
+				return nil
+			}
+			arr, ok := args[0].([]interface{})
+			if !ok {
+				return nil
+			}
+			for _, item := range args[1:] {
+				arr = append(arr, item)
+			}
+			return arr
+		}
+		evaluator.env["print"] = func(args ...interface{}) interface{} {
+			fmt.Println(args...)
+			return nil
 		}
 		result := evaluator.Eval(program)
 		if reflect.DeepEqual(result, tt.expected) {
