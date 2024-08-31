@@ -956,6 +956,14 @@ func (e *Evaluator) evalCallExpression(function interface{}, arguments []Express
 		return e.evalFunctionCall(fn, arguments)
 	case *FunctionLiteral:
 		return e.evalFunctionLiteralCall(fn, arguments)
+	case func(args ...interface{}) interface{}:
+		// 评估参数
+		evaluatedArgs := []interface{}{}
+		for _, arg := range arguments {
+			evaluatedArgs = append(evaluatedArgs, e.Eval(arg))
+		}
+		// 调用外部绑定的函数
+		return fn(evaluatedArgs...)
 	default:
 		return nil
 	}
@@ -1435,6 +1443,19 @@ func main() {
 			continue
 		}
 		evaluator := NewEvaluator()
+		evaluator.env["len"] = func(args ...interface{}) interface{} {
+			if len(args) != 1 {
+				return nil
+			}
+			switch arg := args[0].(type) {
+			case string:
+				return float64(len(arg))
+			case []interface{}:
+				return float64(len(arg))
+			default:
+				return nil
+			}
+		}
 		result := evaluator.Eval(program)
 		if reflect.DeepEqual(result, tt.expected) {
 			fmt.Printf("Test passed: %s\n", tt.input)
