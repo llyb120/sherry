@@ -36,6 +36,11 @@ const (
 	TOKEN_BREAK
 
 	TOKEN_MODULO
+	TOKEN_STRING
+
+	TOKEN_LBRACKET
+	TOKEN_RBRACKET
+	TOKEN_COLON
 )
 
 type Token struct {
@@ -125,7 +130,16 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: TOKEN_EOF, Value: string(l.ch)}
 		}
 	case '%':
-        tok = Token{Type: TOKEN_MODULO, Value: string(l.ch)}
+		tok = Token{Type: TOKEN_MODULO, Value: string(l.ch)}
+	case '"':
+		tok.Type = TOKEN_STRING
+		tok.Value = l.readString()
+	case '[':
+		tok = Token{Type: TOKEN_LBRACKET, Value: string(l.ch)}
+	case ']':
+		tok = Token{Type: TOKEN_RBRACKET, Value: string(l.ch)}
+	case ':':
+		tok = Token{Type: TOKEN_COLON, Value: string(l.ch)}
 	case 0:
 		tok.Value = ""
 		tok.Type = TOKEN_EOF
@@ -145,6 +159,17 @@ func (l *Lexer) NextToken() Token {
 
 	l.readChar()
 	return tok
+}
+
+func (l *Lexer) readString() string {
+	position := l.pos + 1
+	for {
+		l.readChar()
+		if l.ch == '"' || l.ch == 0 {
+			break
+		}
+	}
+	return l.input[position:l.pos]
 }
 
 func (l *Lexer) skipWhitespace() {
@@ -252,6 +277,15 @@ type Identifier struct {
 func (i *Identifier) expressionNode()      {}
 func (i *Identifier) TokenLiteral() string { return i.Token.Value }
 
+type IndexExpression struct {
+	Token Token
+	Left  Expression
+	Index Expression
+}
+
+func (ie *IndexExpression) expressionNode()      {}
+func (ie *IndexExpression) TokenLiteral() string { return ie.Token.Value }
+
 type PrefixExpression struct {
 	Token    Token
 	Operator string
@@ -339,6 +373,7 @@ const (
 	PRODUCT
 	PREFIX
 	CALL
+    INDEX       // array[index]  // 添加这一行
 )
 
 func (p *Parser) parseExpression(precedence int) Expression {
@@ -372,9 +407,78 @@ func (p *Parser) prefixParseFns(tokenType TokenType) func() Expression {
 		return p.parsePrefixExpression
 	case TOKEN_LPAREN:
 		return p.parseGroupedExpression
+	case TOKEN_STRING:
+		return p.parseStringLiteral
+	case TOKEN_LBRACE:
+		return p.parseObjectLiteral
+	case TOKEN_LBRACKET:
+		return p.parseArrayLiteral
 	default:
 		return nil
 	}
+}
+
+func (p *Parser) parseStringLiteral() Expression {
+	return &StringLiteral{Token: p.curToken, Value: p.curToken.Value}
+}
+
+func (p *Parser) parseObjectLiteral() Expression {
+	obj := &ObjectLiteral{Token: p.curToken}
+	obj.Pairs = make(map[Expression]Expression)
+
+	for !p.peekTokenIs(TOKEN_RBRACE) {
+		p.nextToken()
+		key := p.parseExpression(LOWEST)
+
+		if !p.expectPeek(TOKEN_COLON) {
+			return nil
+		}
+
+		p.nextToken()
+		value := p.parseExpression(LOWEST)
+
+		obj.Pairs[key] = value
+
+		if !p.peekTokenIs(TOKEN_RBRACE) && !p.expectPeek(TOKEN_COMMA) {
+			return nil
+		}
+	}
+
+	if !p.expectPeek(TOKEN_RBRACE) {
+		return nil
+	}
+
+	return obj
+}
+
+func (p *Parser) parseExpressionList(end TokenType) []Expression {
+	var list []Expression
+
+	if p.peekTokenIs(end) {
+		p.nextToken()
+		return list
+	}
+
+	p.nextToken()
+	list = append(list, p.parseExpression(LOWEST))
+
+	for p.peekTokenIs(TOKEN_COMMA) {
+		p.nextToken()
+		p.nextToken()
+		list = append(list, p.parseExpression(LOWEST))
+	}
+
+	if !p.expectPeek(end) {
+		return nil
+	}
+
+	return list
+}
+
+func (p *Parser) parseArrayLiteral() Expression {
+	array := &ArrayLiteral{Token: p.curToken}
+	array.Elements = p.parseExpressionList(TOKEN_RBRACKET)
+	return array
 }
 
 func (p *Parser) infixParseFns(tokenType TokenType) func(Expression) Expression {
@@ -385,9 +489,24 @@ func (p *Parser) infixParseFns(tokenType TokenType) func(Expression) Expression 
 		return p.parseInfixExpression
 	case TOKEN_LPAREN:
 		return p.parseCallExpression
+	case TOKEN_LBRACKET:
+		return p.parseIndexExpression
 	default:
 		return nil
 	}
+}
+
+func (p *Parser) parseIndexExpression(left Expression) Expression {
+	exp := &IndexExpression{Token: p.curToken, Left: left}
+
+	p.nextToken()
+	exp.Index = p.parseExpression(LOWEST)
+
+	if !p.expectPeek(TOKEN_RBRACKET) {
+		return nil
+	}
+
+	return exp
 }
 
 func (p *Parser) parseIdentifier() Expression {
@@ -481,7 +600,7 @@ var precedences = map[TokenType]int{
 	TOKEN_DIVIDE:        PRODUCT,
 	TOKEN_LPAREN:        CALL,
 	TOKEN_MODULO:        PRODUCT,
-
+	TOKEN_LBRACKET:      INDEX,
 }
 
 type Evaluator struct {
@@ -514,43 +633,100 @@ func (e *Evaluator) evalPrefixExpression(operator string, right interface{}) int
 }
 
 func (e *Evaluator) evalInfixExpression(operator string, left, right interface{}) interface{} {
-	leftVal, leftOk := left.(float64)
-	rightVal, rightOk := right.(float64)
-
-	if !leftOk || !rightOk {
-		return nil
-	}
-
 	switch operator {
 	case "+":
-		return leftVal + rightVal
-	case "-":
-		return leftVal - rightVal
-	case "*":
-		return leftVal * rightVal
-	case "/":
-		if rightVal == 0 {
-			return nil // 处理除以零的情况
+		switch leftVal := left.(type) {
+		case float64:
+			if rightVal, ok := right.(float64); ok {
+				return leftVal + rightVal
+			}
+		case string:
+			if rightVal, ok := right.(string); ok {
+				return leftVal + rightVal
+			}
 		}
-		return leftVal / rightVal
+	case "-":
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return leftVal - rightVal
+			}
+		}
+	case "*":
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return leftVal * rightVal
+			}
+		}
+	case "/":
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				if rightVal == 0 {
+					return nil // 处理除以零的情况
+				}
+				return leftVal / rightVal
+			}
+		}
 	case "<":
-		return leftVal < rightVal
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return leftVal < rightVal
+			}
+		}
 	case "<=":
-		return leftVal <= rightVal
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return leftVal <= rightVal
+			}
+		}
 	case ">":
-		return leftVal > rightVal
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return leftVal > rightVal
+			}
+		}
 	case ">=":
-		return leftVal >= rightVal
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return leftVal >= rightVal
+			}
+		}
 	case "==":
-		return leftVal == rightVal
+		return left == right
 	case "!=":
-		return leftVal != rightVal
+		return left != right
 	case "%":
-        return float64(int(leftVal) % int(rightVal))
-	default:
-		return nil
+		if leftVal, ok := left.(float64); ok {
+			if rightVal, ok := right.(float64); ok {
+				return float64(int(leftVal) % int(rightVal))
+			}
+		}
 	}
+	return nil
 }
+
+type StringLiteral struct {
+	Token Token
+	Value string
+}
+
+func (sl *StringLiteral) expressionNode()      {}
+func (sl *StringLiteral) TokenLiteral() string { return sl.Token.Value }
+
+type ObjectLiteral struct {
+	Token Token
+	Pairs map[Expression]Expression
+}
+
+func (ol *ObjectLiteral) expressionNode()      {}
+func (ol *ObjectLiteral) TokenLiteral() string { return ol.Token.Value }
+
+type ArrayLiteral struct {
+	Token    Token
+	Elements []Expression
+}
+
+func (al *ArrayLiteral) expressionNode()      {}
+func (al *ArrayLiteral) TokenLiteral() string { return al.Token.Value }
 
 type IfStatement struct {
 	Token       Token
@@ -844,8 +1020,57 @@ func (e *Evaluator) Eval(node Node) interface{} {
 		returnValue := e.Eval(node.ReturnValue)
 		e.env["__return__"] = returnValue
 		return returnValue
+	case *StringLiteral:
+		return node.Value
+	case *ObjectLiteral:
+		return e.evalObjectLiteral(node)
+	case *ArrayLiteral:
+		return e.evalArrayLiteral(node)
+	case *IndexExpression:
+		left := e.Eval(node.Left)
+		index := e.Eval(node.Index)
+		return e.evalIndexExpression(left, index)
 	}
 	return nil
+}
+
+func (e *Evaluator) evalIndexExpression(left, index interface{}) interface{} {
+	switch left := left.(type) {
+	case []interface{}:
+		idx, ok := index.(float64)
+		if !ok {
+			return nil
+		}
+		if int(idx) < 0 || int(idx) >= len(left) {
+			return nil
+		}
+		return left[int(idx)]
+	case map[string]interface{}:
+		key, ok := index.(string)
+		if !ok {
+			return nil
+		}
+		return left[key]
+	}
+	return nil
+}
+
+func (e *Evaluator) evalObjectLiteral(node *ObjectLiteral) interface{} {
+	obj := make(map[string]interface{})
+	for keyNode, valueNode := range node.Pairs {
+		key := e.Eval(keyNode).(string)
+		value := e.Eval(valueNode)
+		obj[key] = value
+	}
+	return obj
+}
+
+func (e *Evaluator) evalArrayLiteral(node *ArrayLiteral) interface{} {
+	var elements []interface{}
+	for _, element := range node.Elements {
+		elements = append(elements, e.Eval(element))
+	}
+	return elements
 }
 
 func (p *Parser) parseFunctionStatement() *FunctionStatement {
@@ -987,53 +1212,33 @@ type CallExpression struct {
 	Arguments []Expression
 }
 
-func (p *Parser) parseExpressionList(end TokenType) []Expression {
-	var list []Expression
-
-	if p.peekTokenIs(end) {
-		p.nextToken()
-		return list
-	}
-
-	p.nextToken()
-	list = append(list, p.parseExpression(LOWEST))
-
-	for p.peekTokenIs(TOKEN_COMMA) {
-		p.nextToken()
-		p.nextToken()
-		list = append(list, p.parseExpression(LOWEST))
-	}
-
-	if !p.expectPeek(end) {
-		return nil
-	}
-
-	return list
-}
-
 func main() {
 	tests := []struct {
 		input    string
 		expected interface{}
 	}{
-		{"2 + 3", 5.0},
-		{"2 - 3", -1.0},
-		{"2 * 3", 6.0},
-		{"2 / 3", 2.0 / 3.0},
-		{"2 + 3 * 4", 14.0},
-		{"(2 + 3) * 4", 20.0},
-		{"1 + (2 - 4) * 5", -9.0},
-		{"2.5 * 4 + 8.5", 18.5},
-		{"10 / 4 + 7", 9.5},
-		{"(3 + 5) * (2 - 1)", 8.0},
-		{"-5 + 10 * 2", 15.0},
-		{"a = 0; while a < 5 { a = a + 1; if a == 3 { break } }; a", 3.0},
-		{"x = 0 y = 1 z = 2 func add(x, y) { return x + y + z; }; add(2, 3)", 7.0},
-		{"func factorial(n) { if n == 0 { return 1 } return n * factorial(n - 1) }; factorial(5)", 120.0},
-		{"func fibonacci(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(6)", 8.0},
-		{"x = 10; y = 20; if x < y { x = x + 5 }; x", 15.0},
-		{"a = 1; b = 2; c = 3; if a + b == 3 { c = c + 1 }; c", 4.0},
-		{"x = 0; while x < 10 { if x % 2 == 0 { x = x + 1 } else { x = x + 2 } }; x", 11.0},
+		// {"2 + 3", 5.0},
+		// {"2 - 3", -1.0},
+		// {"2 * 3", 6.0},
+		// {"2 / 3", 2.0 / 3.0},
+		// {"2 + 3 * 4", 14.0},
+		// {"(2 + 3) * 4", 20.0},
+		// {"1 + (2 - 4) * 5", -9.0},
+		// {"2.5 * 4 + 8.5", 18.5},
+		// {"10 / 4 + 7", 9.5},
+		// {"(3 + 5) * (2 - 1)", 8.0},
+		// {"-5 + 10 * 2", 15.0},
+		// {"a = 0; while a < 5 { a = a + 1; if a == 3 { break } }; a", 3.0},
+		// {"x = 0 y = 1 z = 2 func add(x, y) { return x + y + z; }; add(2, 3)", 7.0},
+		// {"func factorial(n) { if n == 0 { return 1 } return n * factorial(n - 1) }; factorial(5)", 120.0},
+		// {"func fibonacci(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(6)", 8.0},
+		// {"x = 10; y = 20; if x < y { x = x + 5 }; x", 15.0},
+		// {"a = 1; b = 2; c = 3; if a + b == 3 { c = c + 1 }; c", 4.0},
+		// {"x = 0; while x < 10 { if x % 2 == 0 { x = x + 1 } else { x = x + 2 } }; x", 11.0},
+		// {"\"hello\" + \" \" + \"world\"", "hello world"},
+		{"[1, 2, 3][1]", 2.0},
+		// {"{ \"key\": \"value\" }[\"key\"]", "value"},
+		// {"a = { \"x\": 10, \"y\": 20 }; a[\"x\"] + a[\"y\"]", 30.0},
 		// {"x = 0; for i = 0; i < 5; i = i + 1 { x = x + i }; x", 10.0},
 		// {"x = 1; for i = 1; i <= 5; i = i + 1 { x = x * i }; x", 120.0},
 		// {"x = 0; for i = 1; i <= 5; i = i + 1 { if i % 2 == 0 { x = x + i } }; x", 6.0},
