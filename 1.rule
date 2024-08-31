@@ -1,0 +1,11 @@
+func test() {
+	println("test")
+    holy = []
+    append(holy, "1")
+    append(holy, "2")
+    append(holy, "3")
+    println(holy)
+}
+
+
+test()

@@ -370,7 +370,7 @@ func (p *Parser) Errors() []string {
 }
 
 func (p *Parser) peekError(t TokenType) {
-	msg := fmt.Sprintf("expected next token to be %s, got %s instead",
+	msg := fmt.Sprintf("期望下一个token为 %d，实际得到的是 %d",
 		t, p.peekToken.Type)
 	p.errors = append(p.errors, msg)
 }
@@ -663,10 +663,12 @@ type Evaluator struct {
 }
 
 func NewEvaluator() *Evaluator {
-	return &Evaluator{
+	e := &Evaluator{
 		env:         make(map[string]interface{}),
 		breakSignal: false,
 	}
+	RegisterStdLib(e)
+	return e
 }
 
 func (e *Evaluator) evalStatements(stmts []Statement) interface{} {
@@ -1501,36 +1503,7 @@ func main() {
 			continue
 		}
 		evaluator := NewEvaluator()
-		evaluator.env["len"] = func(args ...interface{}) interface{} {
-			if len(args) != 1 {
-				return nil
-			}
-			switch arg := args[0].(type) {
-			case string:
-				return float64(len(arg))
-			case []interface{}:
-				return float64(len(arg))
-			default:
-				return nil
-			}
-		}
-		evaluator.env["append"] = func(args ...interface{}) interface{} {
-			if len(args) < 2 {
-				return nil
-			}
-			arr, ok := args[0].([]interface{})
-			if !ok {
-				return nil
-			}
-			for _, item := range args[1:] {
-				arr = append(arr, item)
-			}
-			return arr
-		}
-		evaluator.env["print"] = func(args ...interface{}) interface{} {
-			fmt.Println(args...)
-			return nil
-		}
+
 		result := evaluator.Eval(program)
 		if reflect.DeepEqual(result, tt.expected) {
 			fmt.Printf("Test passed: %s\n", tt.input)
