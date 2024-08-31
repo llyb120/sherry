@@ -314,26 +314,6 @@ func (p *Parser) ParseProgram() *Program {
 	return program
 }
 
-func (p *Parser) parseStatement() Statement {
-	switch p.curToken.Type {
-	case TOKEN_IDENT:
-		if p.peekTokenIs(TOKEN_ASSIGN) {
-			return p.parseAssignStatement()
-		}
-		return p.parseExpressionStatement()
-	case TOKEN_IF:
-		return p.parseIfStatement()
-	case TOKEN_WHILE:
-		return p.parseWhileStatement()
-	case TOKEN_BREAK:
-		return &BreakStatement{Token: p.curToken}
-	case TOKEN_FUNC:
-		return p.parseFunctionStatement()
-	default:
-		return p.parseExpressionStatement()
-	}
-}
-
 func (p *Parser) parseExpressionStatement() *ExpressionStatement {
 	stmt := &ExpressionStatement{Token: p.curToken}
 
@@ -485,15 +465,17 @@ func (p *Parser) curPrecedence() int {
 }
 
 var precedences = map[TokenType]int{
-	TOKEN_EQUAL:     EQUALS,
-	TOKEN_NOT_EQUAL: EQUALS,
-	TOKEN_LESS:      LESSGREATER,
-	TOKEN_GREATER:   LESSGREATER,
-	TOKEN_PLUS:      SUM,
-	TOKEN_MINUS:     SUM,
-	TOKEN_MULTIPLY:  PRODUCT,
-	TOKEN_DIVIDE:    PRODUCT,
-	TOKEN_LPAREN:    CALL,
+	TOKEN_EQUAL:         EQUALS,
+	TOKEN_NOT_EQUAL:     EQUALS,
+	TOKEN_LESS:          LESSGREATER,
+	TOKEN_LESS_EQUAL:    LESSGREATER,
+	TOKEN_GREATER:       LESSGREATER,
+	TOKEN_GREATER_EQUAL: LESSGREATER,
+	TOKEN_PLUS:          SUM,
+	TOKEN_MINUS:         SUM,
+	TOKEN_MULTIPLY:      PRODUCT,
+	TOKEN_DIVIDE:        PRODUCT,
+	TOKEN_LPAREN:        CALL,
 }
 
 type Evaluator struct {
@@ -506,47 +488,6 @@ func NewEvaluator() *Evaluator {
 		env:         make(map[string]interface{}),
 		breakSignal: false,
 	}
-}
-
-func (e *Evaluator) Eval(node Node) interface{} {
-	switch node := node.(type) {
-	case *Program:
-		return e.evalStatements(node.Statements)
-	case *ExpressionStatement:
-		return e.Eval(node.Expression)
-	case *IntegerLiteral:
-		return node.Value
-	case *PrefixExpression:
-		right := e.Eval(node.Right)
-		return e.evalPrefixExpression(node.Operator, right)
-	case *InfixExpression:
-		left := e.Eval(node.Left)
-		right := e.Eval(node.Right)
-		return e.evalInfixExpression(node.Operator, left, right)
-	case *IfStatement:
-		return e.evalIfStatement(node)
-	case *WhileStatement:
-		return e.evalWhileStatement(node)
-	case *BlockStatement:
-		return e.evalBlockStatement(node)
-	case *Identifier:
-		return e.evalIdentifier(node)
-	case *AssignStatement:
-		return e.evalAssignStatement(node)
-	case *BreakStatement:
-		e.breakSignal = true
-		return nil
-	case *FunctionStatement:
-		e.env[node.Name.Value] = node
-		return nil
-	case *CallExpression:
-		function := e.Eval(node.Function)
-		if function == nil {
-			return nil
-		}
-		return e.evalCallExpression(function, node.Arguments)
-	}
-	return nil
 }
 
 func (e *Evaluator) evalStatements(stmts []Statement) interface{} {
@@ -763,8 +704,11 @@ func (e *Evaluator) evalCallExpression(function interface{}, arguments []Express
 		return nil
 	}
 }
-
 func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expression) interface{} {
+	// 保存当前环境
+	oldEnv := e.env
+
+	// 创建新的局部环境
 	env := make(map[string]interface{})
 
 	// 先将参数值存入局部环境
@@ -777,23 +721,123 @@ func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expressi
 	}
 
 	// 合并外部环境到局部环境
-	for k, v := range e.env {
+	for k, v := range oldEnv {
 		if _, exists := env[k]; !exists {
 			env[k] = v
 		}
 	}
 
-	// 保存当前环境
-	oldEnv := e.env
+	// 设置新的局部环境
 	e.env = env
 
 	// 评估函数体
-	result := e.Eval(fn.Body)
+	var result interface{}
+	for _, stmt := range fn.Body.Statements {
+		e.Eval(stmt)
+		if returnValue, exists := e.env["__return__"]; exists {
+			// 恢复原环境
+			e.env = oldEnv
+			return returnValue
+		}
+	}
 
 	// 恢复原环境
 	e.env = oldEnv
 
 	return result
+}
+
+// 添加 ReturnStatement 结构
+type ReturnStatement struct {
+	Token       Token
+	ReturnValue Expression
+}
+
+func (rs *ReturnStatement) statementNode()       {}
+func (rs *ReturnStatement) TokenLiteral() string { return rs.Token.Value }
+
+// 在 Parser 中添加对 return 语句的解析
+func (p *Parser) parseReturnStatement() *ReturnStatement {
+	stmt := &ReturnStatement{Token: p.curToken}
+
+	p.nextToken()
+
+	stmt.ReturnValue = p.parseExpression(LOWEST)
+
+	if p.peekTokenIs(TOKEN_SEMICOLON) {
+		p.nextToken()
+	}
+
+	return stmt
+}
+
+// 在 parseStatement 函数中添加对 return 语句的处理
+func (p *Parser) parseStatement() Statement {
+	switch p.curToken.Type {
+	case TOKEN_IDENT:
+		if p.peekTokenIs(TOKEN_ASSIGN) {
+			return p.parseAssignStatement()
+		}
+		return p.parseExpressionStatement()
+	case TOKEN_IF:
+		return p.parseIfStatement()
+	case TOKEN_WHILE:
+		return p.parseWhileStatement()
+	case TOKEN_BREAK:
+		return &BreakStatement{Token: p.curToken}
+	case TOKEN_FUNC:
+		return p.parseFunctionStatement()
+	case TOKEN_RETURN:
+		return p.parseReturnStatement()
+	default:
+		return p.parseExpressionStatement()
+	}
+}
+
+// 在 Evaluator 的 Eval 方法中添加对 ReturnStatement 的处理
+func (e *Evaluator) Eval(node Node) interface{} {
+	switch node := node.(type) {
+	case *Program:
+		return e.evalStatements(node.Statements)
+	case *ExpressionStatement:
+		return e.Eval(node.Expression)
+	case *IntegerLiteral:
+		return node.Value
+	case *PrefixExpression:
+		right := e.Eval(node.Right)
+		return e.evalPrefixExpression(node.Operator, right)
+	case *InfixExpression:
+		left := e.Eval(node.Left)
+		right := e.Eval(node.Right)
+		return e.evalInfixExpression(node.Operator, left, right)
+	case *IfStatement:
+		return e.evalIfStatement(node)
+	case *WhileStatement:
+		return e.evalWhileStatement(node)
+	case *BlockStatement:
+		return e.evalBlockStatement(node)
+	case *Identifier:
+		return e.evalIdentifier(node)
+	case *AssignStatement:
+		return e.evalAssignStatement(node)
+	case *BreakStatement:
+		e.breakSignal = true
+		return nil
+	case *FunctionStatement:
+		e.env[node.Name.Value] = node
+		return nil
+	case *CallExpression:
+		function := e.Eval(node.Function)
+		if function == nil {
+			return nil
+		}
+		return e.evalCallExpression(function, node.Arguments)
+	case *ReturnStatement:
+		returnValue := e.Eval(node.ReturnValue)
+		e.env["__return__"] = returnValue
+		return returnValue
+	}
+	return nil
 }
 
 func (p *Parser) parseFunctionStatement() *FunctionStatement {
@@ -977,6 +1021,14 @@ func main() {
 		{"-5 + 10 * 2", 15.0},
 		{"a = 0; while a < 5 { a = a + 1; if a == 3 { break } }; a", 3.0},
 		{"x = 0 y = 1 z = 2 func add(x, y) { return x + y + z; }; add(2, 3)", 7.0},
+		{"func factorial(n) { if n == 0 { return 1 } return n * factorial(n - 1) }; factorial(5)", 120.0},
+		{"func fibonacci(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(6)", 8.0},
+		{"x = 10; y = 20; if x < y { x = x + 5 }; x", 15.0},
+		{"a = 1; b = 2; c = 3; if a + b == 3 { c = c + 1 }; c", 4.0},
+		{"x = 0; while x < 10 { if x % 2 == 0 { x = x + 1 } else { x = x + 2 } }; x", 10.0},
+		// {"x = 0; for i = 0; i < 5; i = i + 1 { x = x + i }; x", 10.0},
+		// {"x = 1; for i = 1; i <= 5; i = i + 1 { x = x * i }; x", 120.0},
+		// {"x = 0; for i = 1; i <= 5; i = i + 1 { if i % 2 == 0 { x = x + i } }; x", 6.0},
 	}
 
 	for _, tt := range tests {
