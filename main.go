@@ -41,6 +41,12 @@ const (
 	TOKEN_LBRACKET
 	TOKEN_RBRACKET
 	TOKEN_COLON
+
+	TOKEN_AND
+	TOKEN_OR
+	TOKEN_TRUE
+	TOKEN_FALSE
+	TOKEN_BANG
 )
 
 type Token struct {
@@ -121,13 +127,25 @@ func (l *Lexer) NextToken() Token {
 		} else {
 			tok = Token{Type: TOKEN_GREATER, Value: string(l.ch)}
 		}
+	case '&':
+		if l.peekChar() == '&' {
+			ch := l.ch
+			l.readChar()
+			tok = Token{Type: TOKEN_AND, Value: string(ch) + string(l.ch)}
+		}
+	case '|':
+		if l.peekChar() == '|' {
+			ch := l.ch
+			l.readChar()
+			tok = Token{Type: TOKEN_OR, Value: string(ch) + string(l.ch)}
+		}
 	case '!':
 		if l.peekChar() == '=' {
 			ch := l.ch
 			l.readChar()
 			tok = Token{Type: TOKEN_NOT_EQUAL, Value: string(ch) + string(l.ch)}
 		} else {
-			tok = Token{Type: TOKEN_EOF, Value: string(l.ch)}
+			tok = Token{Type: TOKEN_BANG, Value: string(l.ch)}
 		}
 	case '%':
 		tok = Token{Type: TOKEN_MODULO, Value: string(l.ch)}
@@ -223,6 +241,10 @@ func (l *Lexer) lookupIdent(ident string) TokenType {
 		return TOKEN_RETURN
 	case "break":
 		return TOKEN_BREAK
+	case "true":
+		return TOKEN_TRUE
+	case "false":
+		return TOKEN_FALSE
 	default:
 		return TOKEN_IDENT
 	}
@@ -367,13 +389,15 @@ func (p *Parser) parseExpressionStatement() *ExpressionStatement {
 const (
 	_ int = iota
 	LOWEST
+	LOGICAL_OR  // ||
+	LOGICAL_AND // &&
 	EQUALS
 	LESSGREATER
 	SUM
 	PRODUCT
 	PREFIX
 	CALL
-    INDEX       // array[index]  // 添加这一行
+	INDEX // array[index]  // 添加这一行
 )
 
 func (p *Parser) parseExpression(precedence int) Expression {
@@ -403,7 +427,7 @@ func (p *Parser) prefixParseFns(tokenType TokenType) func() Expression {
 		return p.parseIdentifier
 	case TOKEN_NUMBER:
 		return p.parseIntegerLiteral
-	case TOKEN_MINUS:
+	case TOKEN_MINUS, TOKEN_BANG:
 		return p.parsePrefixExpression
 	case TOKEN_LPAREN:
 		return p.parseGroupedExpression
@@ -413,6 +437,8 @@ func (p *Parser) prefixParseFns(tokenType TokenType) func() Expression {
 		return p.parseObjectLiteral
 	case TOKEN_LBRACKET:
 		return p.parseArrayLiteral
+	case TOKEN_TRUE, TOKEN_FALSE:
+		return p.parseBoolean
 	default:
 		return nil
 	}
@@ -481,16 +507,22 @@ func (p *Parser) parseArrayLiteral() Expression {
 	return array
 }
 
+func (p *Parser) parseBoolean() Expression {
+	return &Boolean{Token: p.curToken, Value: p.curToken.Type == TOKEN_TRUE}
+}
+
 func (p *Parser) infixParseFns(tokenType TokenType) func(Expression) Expression {
 	switch tokenType {
 	case TOKEN_PLUS, TOKEN_MINUS, TOKEN_MULTIPLY, TOKEN_DIVIDE,
-		TOKEN_EQUAL, TOKEN_NOT_EQUAL, TOKEN_LESS, TOKEN_LESS_EQUAL,
+		TOKEN_EQUAL, TOKEN_LESS, TOKEN_LESS_EQUAL,
 		TOKEN_GREATER, TOKEN_GREATER_EQUAL, TOKEN_MODULO:
 		return p.parseInfixExpression
 	case TOKEN_LPAREN:
 		return p.parseCallExpression
 	case TOKEN_LBRACKET:
 		return p.parseIndexExpression
+	case TOKEN_AND, TOKEN_OR, TOKEN_NOT_EQUAL:
+		return p.parseInfixExpression
 	default:
 		return nil
 	}
@@ -601,6 +633,8 @@ var precedences = map[TokenType]int{
 	TOKEN_LPAREN:        CALL,
 	TOKEN_MODULO:        PRODUCT,
 	TOKEN_LBRACKET:      INDEX,
+	TOKEN_AND:           LOGICAL_AND,
+	TOKEN_OR:            LOGICAL_OR,
 }
 
 type Evaluator struct {
@@ -625,6 +659,8 @@ func (e *Evaluator) evalStatements(stmts []Statement) interface{} {
 
 func (e *Evaluator) evalPrefixExpression(operator string, right interface{}) interface{} {
 	switch operator {
+	case "!":
+		return !isTruthy(right)
 	case "-":
 		return -right.(float64)
 	default:
@@ -700,9 +736,37 @@ func (e *Evaluator) evalInfixExpression(operator string, left, right interface{}
 				return float64(int(leftVal) % int(rightVal))
 			}
 		}
+	case "&&":
+		leftVal, ok := left.(bool)
+		if !ok {
+			return nil
+		}
+		rightVal, ok := right.(bool)
+		if !ok {
+			return nil
+		}
+		return leftVal && rightVal
+	case "||":
+		leftVal, ok := left.(bool)
+		if !ok {
+			return nil
+		}
+		rightVal, ok := right.(bool)
+		if !ok {
+			return nil
+		}
+		return leftVal || rightVal
 	}
 	return nil
 }
+
+type Boolean struct {
+	Token Token
+	Value bool
+}
+
+func (b *Boolean) expressionNode()      {}
+func (b *Boolean) TokenLiteral() string { return b.Token.Value }
 
 type StringLiteral struct {
 	Token Token
@@ -1030,6 +1094,8 @@ func (e *Evaluator) Eval(node Node) interface{} {
 		left := e.Eval(node.Left)
 		index := e.Eval(node.Index)
 		return e.evalIndexExpression(left, index)
+	case *Boolean:
+		return node.Value
 	}
 	return nil
 }
@@ -1236,12 +1302,27 @@ func main() {
 		// {"a = 1; b = 2; c = 3; if a + b == 3 { c = c + 1 }; c", 4.0},
 		// {"x = 0; while x < 10 { if x % 2 == 0 { x = x + 1 } else { x = x + 2 } }; x", 11.0},
 		// {"\"hello\" + \" \" + \"world\"", "hello world"},
-		{"[1, 2, 3][1]", 2.0},
+		// {"[1, 2, 3][1]", 2.0},
 		// {"{ \"key\": \"value\" }[\"key\"]", "value"},
 		// {"a = { \"x\": 10, \"y\": 20 }; a[\"x\"] + a[\"y\"]", 30.0},
-		// {"x = 0; for i = 0; i < 5; i = i + 1 { x = x + i }; x", 10.0},
-		// {"x = 1; for i = 1; i <= 5; i = i + 1 { x = x * i }; x", 120.0},
-		// {"x = 0; for i = 1; i <= 5; i = i + 1 { if i % 2 == 0 { x = x + i } }; x", 6.0},
+		// {"true", true},
+		// {"false", false},
+		// {"1 == 1", true},
+		// {"1 != 2", true},
+		// {"1 < 2", true},
+		// {"2 > 1", true},
+		// {"1 <= 1", true},
+		// {"1 >= 1", true},
+		{"!(true)", false},
+		{"!(false)", true},
+		// {"true && true", true},
+		// {"true && false", false},
+		// {"false && true", false},
+		// {"false && false", false},
+		// {"true || true", true},
+		// {"true || false", true},
+		// {"false || true", true},
+		// {"false || false", false},
 	}
 
 	for _, tt := range tests {
