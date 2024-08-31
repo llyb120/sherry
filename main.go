@@ -735,7 +735,7 @@ func (e *Evaluator) evalBlockStatement(bs *BlockStatement) interface{} {
 	for _, stmt := range bs.Statements {
 		result = e.Eval(stmt)
 		if e.breakSignal {
-			e.breakSignal = false
+			// 如果检测到 breakSignal，立即停止执行
 			break
 		}
 	}
@@ -766,6 +766,8 @@ func (e *Evaluator) evalCallExpression(function interface{}, arguments []Express
 
 func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expression) interface{} {
 	env := make(map[string]interface{})
+
+	// 先将参数值存入局部环境
 	for i, param := range fn.Parameters {
 		if i < len(arguments) {
 			env[param.Value] = e.Eval(arguments[i])
@@ -774,9 +776,21 @@ func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expressi
 		}
 	}
 
+	// 合并外部环境到局部环境
+	for k, v := range e.env {
+		if _, exists := env[k]; !exists {
+			env[k] = v
+		}
+	}
+
+	// 保存当前环境
 	oldEnv := e.env
 	e.env = env
+
+	// 评估函数体
 	result := e.Eval(fn.Body)
+
+	// 恢复原环境
 	e.env = oldEnv
 
 	return result
