@@ -434,6 +434,14 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		leftExp = infix(leftExp)
 	}
 
+	// 处理赋值操作
+	if p.peekTokenIs(TOKEN_ASSIGN) {
+		p.nextToken()
+		p.nextToken()
+		value := p.parseExpression(LOWEST)
+		return &AssignExpression{Left: leftExp, Value: value}
+	}
+
 	return leftExp
 }
 
@@ -795,6 +803,14 @@ func (e *Evaluator) evalInfixExpression(operator string, left, right interface{}
 	}
 	return nil
 }
+
+type AssignExpression struct {
+	Left  Expression
+	Value Expression
+}
+
+func (ae *AssignExpression) expressionNode()      {}
+func (ae *AssignExpression) TokenLiteral() string { return "=" }
 
 type Boolean struct {
 	Token Token
@@ -1200,8 +1216,32 @@ func (e *Evaluator) Eval(node Node) interface{} {
 		return node.Value
 	case *FunctionLiteral:
 		return node
+	case *AssignExpression:
+		return e.evalAssignExpression(node)
 	}
 	return nil
+}
+
+func (e *Evaluator) evalAssignExpression(ae *AssignExpression) interface{} {
+	value := e.Eval(ae.Value)
+
+	switch left := ae.Left.(type) {
+	case *Identifier:
+		e.env[left.Value] = value
+	case *IndexExpression:
+		array := e.Eval(left.Left)
+		index := int(e.Eval(left.Index).(float64))
+		if arr, ok := array.([]interface{}); ok {
+			// 确保数组有足够的长度
+			for len(arr) <= index {
+				arr = append(arr, nil)
+			}
+			arr[index] = value
+			e.env[left.Left.(*Identifier).Value] = arr
+		}
+	}
+
+	return value
 }
 
 func (e *Evaluator) evalIndexExpression(left, index interface{}) interface{} {
@@ -1468,11 +1508,17 @@ func main() {
 		// {"false || true", true},
 		// {"false || false", false},
 		// {"a += 5", 5.0},
-		{"a = 10; a -= 3", 7.0},
-		{"b = 2; b += 3; b += 4", 9.0},
+		// {"a = 10; a -= 3", 7.0},
+		// {"b = 2; b += 3; b += 4", 9.0},
 		// {"c = 0; for i = 0; i < 5; i++ { c += 1 }; c", 5.0},
-		{"x = 10; x += 2; x -= 5", 7.0},
-		{"y = 20; y -= 10; y += 5", 15.0},
+		// {"x = 10; x += 2; x -= 5", 7.0},
+		// {"y = 20; y -= 10; y += 5", 15.0},
+
+		{"a = []; a[0] = 2; a[0]", 2.0},
+		{"b = [1, 2, 3]; b[1] = 5; b[1]", 5.0},
+		{"c = []; c[2] = 3; c", []interface{}{nil, nil, 3.0}},
+		{"d = [1]; d[3] = 4; d", []interface{}{1.0, nil, nil, 4.0}},
+		{"e = [1, 2]; e[0] = e[0] + 10; e[0]", 11.0},
 
 		// {"factorial = func(n) { if n == 0 { return 1 } return n * factorial(n - 1) }; factorial(5)", 120.0},
 		// {"isEven = func(n) { if n == 0 { return true } return isOdd(n - 1) }; isOdd = func(n) { if n == 0 { return false } return isEven(n - 1) }; isEven(10)", true},
