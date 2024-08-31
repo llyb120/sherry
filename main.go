@@ -33,6 +33,7 @@ const (
     TOKEN_LESS_EQUAL
     TOKEN_GREATER
     TOKEN_GREATER_EQUAL
+    TOKEN_BREAK
 )
 
 type Token struct {
@@ -191,6 +192,8 @@ func (l *Lexer) lookupIdent(ident string) TokenType {
         return TOKEN_FUNC
     case "return":
         return TOKEN_RETURN
+    case "break":
+        return TOKEN_BREAK
     default:
         return TOKEN_IDENT
     }
@@ -265,13 +268,17 @@ func (ie *InfixExpression) expressionNode()      {}
 func (ie *InfixExpression) TokenLiteral() string { return ie.Token.Value }
 
 type Parser struct {
-    l      *Lexer
+    l         *Lexer
     curToken  Token
     peekToken Token
+    errors    []string
 }
 
 func NewParser(l *Lexer) *Parser {
-    p := &Parser{l: l}
+    p := &Parser{
+        l:      l,
+        errors: []string{},
+    }
     p.nextToken()
     p.nextToken()
     return p
@@ -280,6 +287,16 @@ func NewParser(l *Lexer) *Parser {
 func (p *Parser) nextToken() {
     p.curToken = p.peekToken
     p.peekToken = p.l.NextToken()
+}
+
+func (p *Parser) Errors() []string {
+    return p.errors
+}
+
+func (p *Parser) peekError(t TokenType) {
+    msg := fmt.Sprintf("expected next token to be %s, got %s instead",
+        t, p.peekToken.Type)
+    p.errors = append(p.errors, msg)
 }
 
 func (p *Parser) ParseProgram() *Program {
@@ -299,6 +316,17 @@ func (p *Parser) ParseProgram() *Program {
 
 func (p *Parser) parseStatement() Statement {
     switch p.curToken.Type {
+    case TOKEN_IDENT:
+        if p.peekTokenIs(TOKEN_ASSIGN) {
+            return p.parseAssignStatement()
+        }
+        return p.parseExpressionStatement()
+    case TOKEN_IF:
+        return p.parseIfStatement()
+    case TOKEN_WHILE:
+        return p.parseWhileStatement()
+    case TOKEN_BREAK:
+        return &BreakStatement{Token: p.curToken}
     default:
         return p.parseExpressionStatement()
     }
@@ -365,7 +393,9 @@ func (p *Parser) prefixParseFns(tokenType TokenType) func() Expression {
 
 func (p *Parser) infixParseFns(tokenType TokenType) func(Expression) Expression {
     switch tokenType {
-    case TOKEN_PLUS, TOKEN_MINUS, TOKEN_MULTIPLY, TOKEN_DIVIDE:
+    case TOKEN_PLUS, TOKEN_MINUS, TOKEN_MULTIPLY, TOKEN_DIVIDE,
+         TOKEN_EQUAL, TOKEN_NOT_EQUAL, TOKEN_LESS, TOKEN_LESS_EQUAL,
+         TOKEN_GREATER, TOKEN_GREATER_EQUAL:
         return p.parseInfixExpression
     default:
         return nil
@@ -462,7 +492,17 @@ var precedences = map[TokenType]int{
     TOKEN_LPAREN:         CALL,
 }
 
-type Evaluator struct{}
+type Evaluator struct {
+    env         map[string]interface{}
+    breakSignal bool
+}
+
+func NewEvaluator() *Evaluator {
+    return &Evaluator{
+        env:         make(map[string]interface{}),
+        breakSignal: false,
+    }
+}
 
 func (e *Evaluator) Eval(node Node) interface{} {
     switch node := node.(type) {
@@ -479,6 +519,19 @@ func (e *Evaluator) Eval(node Node) interface{} {
         left := e.Eval(node.Left)
         right := e.Eval(node.Right)
         return e.evalInfixExpression(node.Operator, left, right)
+    case *IfStatement:
+        return e.evalIfStatement(node)
+    case *WhileStatement:
+        return e.evalWhileStatement(node)
+    case *BlockStatement:
+        return e.evalBlockStatement(node)
+    case *Identifier:
+        return e.evalIdentifier(node)
+    case *AssignStatement:
+        return e.evalAssignStatement(node)
+    case *BreakStatement:
+        e.breakSignal = true
+        return nil
     }
     return nil
 }
@@ -520,41 +573,245 @@ func (e *Evaluator) evalInfixExpression(operator string, left, right interface{}
             return nil // 处理除以零的情况
         }
         return leftVal / rightVal
+    case "<":
+        return leftVal < rightVal
+    case "<=":
+        return leftVal <= rightVal
+    case ">":
+        return leftVal > rightVal
+    case ">=":
+        return leftVal >= rightVal
+    case "==":
+        return leftVal == rightVal
+    case "!=":
+        return leftVal != rightVal
     default:
         return nil
     }
 }
 
-func main() {
-    evaluator := &Evaluator{}
+type IfStatement struct {
+    Token       Token
+    Condition   Expression
+    Consequence *BlockStatement
+    Alternative *BlockStatement
+}
 
-    testCases := []struct {
-        input    string
-        expected float64
-    }{
-        {"1 + (2 - 4) * 5", -9},
-        {"2.5 * 4 + 8.5", 18.5},
-        {"10 / 4 + 7", 9.5},
-        {"(3 + 5) * (2 - 1)", 8},
-        {"-5 + 10 * 2", 15},
+func (is *IfStatement) statementNode()       {}
+func (is *IfStatement) TokenLiteral() string { return is.Token.Value }
+
+type WhileStatement struct {
+    Token     Token
+    Condition Expression
+    Body      *BlockStatement
+}
+
+func (ws *WhileStatement) statementNode()       {}
+func (ws *WhileStatement) TokenLiteral() string { return ws.Token.Value }
+
+type BlockStatement struct {
+    Token      Token
+    Statements []Statement
+}
+
+func (bs *BlockStatement) statementNode()       {}
+func (bs *BlockStatement) TokenLiteral() string { return bs.Token.Value }
+
+type BreakStatement struct {
+    Token Token
+}
+
+func (bs *BreakStatement) statementNode()       {}
+func (bs *BreakStatement) TokenLiteral() string { return bs.Token.Value }
+
+func (p *Parser) parseIfStatement() *IfStatement {
+    stmt := &IfStatement{Token: p.curToken}
+
+    p.nextToken() // 跳过 'if' 关键字
+    stmt.Condition = p.parseExpression(LOWEST)
+
+    if !p.expectPeek(TOKEN_LBRACE) {
+        fmt.Println("Error: Expected '{' before if body")
+        return nil
     }
 
-    for _, tc := range testCases {
-        l := NewLexer(tc.input)
-        p := NewParser(l)
-        program := p.ParseProgram()
+    stmt.Consequence = p.parseBlockStatement()
 
-        result := evaluator.Eval(program)
-        fmt.Printf("输入: %s\n", tc.input)
-        fmt.Printf("期望结果: %v\n", tc.expected)
-        fmt.Printf("实际结果: %v\n", result)
-        if result != nil {
-            if result.(float64) != tc.expected {
-                fmt.Println("错误：结果不匹配！")
-            }
-        } else {
-            fmt.Println("错误：计算结果为 nil")
+    if p.peekTokenIs(TOKEN_ELSE) {
+        p.nextToken()
+
+        if !p.expectPeek(TOKEN_LBRACE) {
+            fmt.Println("Error: Expected '{' before else body")
+            return nil
         }
-        fmt.Println()
+
+        stmt.Alternative = p.parseBlockStatement()
+    }
+
+    return stmt
+}
+
+func (p *Parser) parseWhileStatement() *WhileStatement {
+    stmt := &WhileStatement{Token: p.curToken}
+
+    p.nextToken() // 跳过 'while' 关键字
+    stmt.Condition = p.parseExpression(LOWEST)
+
+    if !p.expectPeek(TOKEN_LBRACE) {
+        fmt.Println("Error: Expected '{' before while body")
+        return nil
+    }
+
+    stmt.Body = p.parseBlockStatement()
+
+    return stmt
+}
+
+func (p *Parser) parseBlockStatement() *BlockStatement {
+    block := &BlockStatement{Token: p.curToken}
+    block.Statements = []Statement{}
+
+    p.nextToken()
+
+    for !p.curTokenIs(TOKEN_RBRACE) && !p.curTokenIs(TOKEN_EOF) {
+        stmt := p.parseStatement()
+        if stmt != nil {
+            block.Statements = append(block.Statements, stmt)
+        }
+        p.nextToken()
+    }
+
+    return block
+}
+
+func (p *Parser) curTokenIs(t TokenType) bool {
+    return p.curToken.Type == t
+}
+
+func (e *Evaluator) evalIfStatement(is *IfStatement) interface{} {
+    if is == nil {
+        return nil
+    }
+    condition := e.Eval(is.Condition)
+    if isTruthy(condition) {
+        return e.Eval(is.Consequence)
+    } else if is.Alternative != nil {
+        return e.Eval(is.Alternative)
+    }
+    return nil
+}
+
+func (e *Evaluator) evalWhileStatement(ws *WhileStatement) interface{} {
+    var result interface{}
+    for {
+        condition := e.Eval(ws.Condition)
+        if !isTruthy(condition) {
+            break
+        }
+        result = e.Eval(ws.Body)
+        if e.breakSignal {
+            e.breakSignal = false // 重置 break 信号
+            break
+        }
+    }
+    return result
+}
+
+func (e *Evaluator) evalBlockStatement(bs *BlockStatement) interface{} {
+    var result interface{}
+    for _, statement := range bs.Statements {
+        result = e.Eval(statement)
+        if e.breakSignal {
+            break
+        }
+    }
+    return result
+}
+
+func isTruthy(obj interface{}) bool {
+    switch v := obj.(type) {
+    case bool:
+        return v
+    case float64:
+        return v != 0
+    default:
+        return false
     }
 }
+
+func (e *Evaluator) evalIdentifier(node *Identifier) interface{} {
+    if val, ok := e.env[node.Value]; ok {
+        return val
+    }
+    return 0 // 默认未定义的变量为 0
+}
+
+func (e *Evaluator) evalAssignStatement(node *AssignStatement) interface{} {
+    val := e.Eval(node.Value)
+    e.env[node.Name.Value] = val
+    return val
+}
+
+type AssignStatement struct {
+    Token Token
+    Name  *Identifier
+    Value Expression
+}
+
+func (as *AssignStatement) statementNode()       {}
+func (as *AssignStatement) TokenLiteral() string { return as.Token.Value }
+
+func (p *Parser) parseAssignStatement() *AssignStatement {
+    stmt := &AssignStatement{Token: p.curToken}
+    stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Value}
+
+    if !p.expectPeek(TOKEN_ASSIGN) {
+        return nil
+    }
+
+    p.nextToken()
+
+    stmt.Value = p.parseExpression(LOWEST)
+
+    if p.peekTokenIs(TOKEN_SEMICOLON) {
+        p.nextToken()
+    }
+
+    return stmt
+}
+
+func main() {
+    tests := []struct {
+        input    string
+        expected interface{}
+    }{
+        {"1 + (2 - 4) * 5", -9.0},
+        {"2.5 * 4 + 8.5", 18.5},
+        {"10 / 4 + 7", 9.5},
+        {"(3 + 5) * (2 - 1)", 8.0},
+        {"-5 + 10 * 2", 15.0},
+        {"a = 0; while a < 5 { a = a + 1; if a == 3 { break } }; a", 3.0},
+    }
+
+    for _, tt := range tests {
+        l := NewLexer(tt.input)
+        p := NewParser(l)
+        program := p.ParseProgram()
+        if len(p.errors) > 0 {
+            fmt.Printf("Parser errors for input: %s\n", tt.input)
+            for _, err := range p.errors {
+                fmt.Println(err)
+            }
+            continue
+        }
+        evaluator := NewEvaluator()
+        result := evaluator.Eval(program)
+        if result != tt.expected {
+            fmt.Printf("Test failed: %s\n", tt.input)
+            fmt.Printf("Expected: %v, got: %v\n", tt.expected, result)
+        } else {
+            fmt.Printf("Test passed: %s\n", tt.input)
+        }
+    }
+}
+
