@@ -34,6 +34,8 @@ const (
 	TOKEN_GREATER
 	TOKEN_GREATER_EQUAL
 	TOKEN_BREAK
+
+	TOKEN_MODULO
 )
 
 type Token struct {
@@ -122,6 +124,8 @@ func (l *Lexer) NextToken() Token {
 		} else {
 			tok = Token{Type: TOKEN_EOF, Value: string(l.ch)}
 		}
+	case '%':
+        tok = Token{Type: TOKEN_MODULO, Value: string(l.ch)}
 	case 0:
 		tok.Value = ""
 		tok.Type = TOKEN_EOF
@@ -377,7 +381,7 @@ func (p *Parser) infixParseFns(tokenType TokenType) func(Expression) Expression 
 	switch tokenType {
 	case TOKEN_PLUS, TOKEN_MINUS, TOKEN_MULTIPLY, TOKEN_DIVIDE,
 		TOKEN_EQUAL, TOKEN_NOT_EQUAL, TOKEN_LESS, TOKEN_LESS_EQUAL,
-		TOKEN_GREATER, TOKEN_GREATER_EQUAL:
+		TOKEN_GREATER, TOKEN_GREATER_EQUAL, TOKEN_MODULO:
 		return p.parseInfixExpression
 	case TOKEN_LPAREN:
 		return p.parseCallExpression
@@ -476,6 +480,8 @@ var precedences = map[TokenType]int{
 	TOKEN_MULTIPLY:      PRODUCT,
 	TOKEN_DIVIDE:        PRODUCT,
 	TOKEN_LPAREN:        CALL,
+	TOKEN_MODULO:        PRODUCT,
+
 }
 
 type Evaluator struct {
@@ -539,6 +545,8 @@ func (e *Evaluator) evalInfixExpression(operator string, left, right interface{}
 		return leftVal == rightVal
 	case "!=":
 		return leftVal != rightVal
+	case "%":
+        return float64(int(leftVal) % int(rightVal))
 	default:
 		return nil
 	}
@@ -1025,7 +1033,7 @@ func main() {
 		{"func fibonacci(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(6)", 8.0},
 		{"x = 10; y = 20; if x < y { x = x + 5 }; x", 15.0},
 		{"a = 1; b = 2; c = 3; if a + b == 3 { c = c + 1 }; c", 4.0},
-		{"x = 0; while x < 10 { if x % 2 == 0 { x = x + 1 } else { x = x + 2 } }; x", 10.0},
+		{"x = 0; while x < 10 { if x % 2 == 0 { x = x + 1 } else { x = x + 2 } }; x", 11.0},
 		// {"x = 0; for i = 0; i < 5; i = i + 1 { x = x + i }; x", 10.0},
 		// {"x = 1; for i = 1; i <= 5; i = i + 1 { x = x * i }; x", 120.0},
 		// {"x = 0; for i = 1; i <= 5; i = i + 1 { if i % 2 == 0 { x = x + i } }; x", 6.0},
