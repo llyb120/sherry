@@ -48,6 +48,9 @@ const (
 	TOKEN_TRUE
 	TOKEN_FALSE
 	TOKEN_BANG
+
+	TOKEN_PLUS_ASSIGN
+	TOKEN_MINUS_ASSIGN
 )
 
 type Token struct {
@@ -93,9 +96,21 @@ func (l *Lexer) NextToken() Token {
 			tok = Token{Type: TOKEN_ASSIGN, Value: string(l.ch)}
 		}
 	case '+':
-		tok = Token{Type: TOKEN_PLUS, Value: string(l.ch)}
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = Token{Type: TOKEN_PLUS_ASSIGN, Value: string(ch) + string(l.ch)}
+		} else {
+			tok = Token{Type: TOKEN_PLUS, Value: string(l.ch)}
+		}
 	case '-':
-		tok = Token{Type: TOKEN_MINUS, Value: string(l.ch)}
+		if l.peekChar() == '=' {
+			ch := l.ch
+			l.readChar()
+			tok = Token{Type: TOKEN_MINUS_ASSIGN, Value: string(ch) + string(l.ch)}
+		} else {
+			tok = Token{Type: TOKEN_MINUS, Value: string(l.ch)}
+		}
 	case '*':
 		tok = Token{Type: TOKEN_MULTIPLY, Value: string(l.ch)}
 	case '/':
@@ -950,6 +965,18 @@ func (e *Evaluator) evalIdentifier(i *Identifier) interface{} {
 
 func (e *Evaluator) evalAssignStatement(as *AssignStatement) interface{} {
 	val := e.Eval(as.Value)
+
+	switch as.Operator {
+	case TOKEN_PLUS_ASSIGN:
+		if existingVal, ok := e.env[as.Name.Value]; ok {
+			val = e.evalInfixExpression("+", existingVal, val)
+		}
+	case TOKEN_MINUS_ASSIGN:
+		if existingVal, ok := e.env[as.Name.Value]; ok {
+			val = e.evalInfixExpression("-", existingVal, val)
+		}
+	}
+
 	e.env[as.Name.Value] = val
 	return val
 }
@@ -1087,7 +1114,7 @@ func (p *Parser) parseReturnStatement() *ReturnStatement {
 func (p *Parser) parseStatement() Statement {
 	switch p.curToken.Type {
 	case TOKEN_IDENT:
-		if p.peekTokenIs(TOKEN_ASSIGN) {
+		if p.peekTokenIs(TOKEN_ASSIGN) || p.peekTokenIs(TOKEN_PLUS_ASSIGN) || p.peekTokenIs(TOKEN_MINUS_ASSIGN) {
 			return p.parseAssignStatement()
 		}
 		return p.parseExpressionStatement()
@@ -1301,9 +1328,10 @@ func isTruthy(obj interface{}) bool {
 }
 
 type AssignStatement struct {
-	Token Token
-	Name  *Identifier
-	Value Expression
+	Token    Token
+	Name     *Identifier
+	Value    Expression
+	Operator TokenType // 添加 Operator 字段
 }
 
 func (as *AssignStatement) statementNode()       {}
@@ -1313,9 +1341,11 @@ func (p *Parser) parseAssignStatement() *AssignStatement {
 	stmt := &AssignStatement{Token: p.curToken}
 	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Value}
 
-	if !p.expectPeek(TOKEN_ASSIGN) {
+	if !p.expectPeek(TOKEN_ASSIGN) && !p.expectPeek(TOKEN_PLUS_ASSIGN) && !p.expectPeek(TOKEN_MINUS_ASSIGN) {
 		return nil
 	}
+
+	operator := p.curToken.Type
 
 	p.nextToken()
 
@@ -1328,6 +1358,11 @@ func (p *Parser) parseAssignStatement() *AssignStatement {
 
 	if p.peekTokenIs(TOKEN_SEMICOLON) {
 		p.nextToken()
+	}
+
+	// 处理 += 和 -=
+	if operator == TOKEN_PLUS_ASSIGN || operator == TOKEN_MINUS_ASSIGN {
+		stmt.Operator = operator
 	}
 
 	return stmt
@@ -1421,6 +1456,12 @@ func main() {
 		// {"true || false", true},
 		// {"false || true", true},
 		// {"false || false", false},
+		// {"a += 5", 5.0},
+		{"a = 10; a -= 3", 7.0},
+		{"b = 2; b += 3; b += 4", 9.0},
+		// {"c = 0; for i = 0; i < 5; i++ { c += 1 }; c", 5.0},
+		{"x = 10; x += 2; x -= 5", 7.0},
+		{"y = 20; y -= 10; y += 5", 15.0},
 
 		// {"factorial = func(n) { if n == 0 { return 1 } return n * factorial(n - 1) }; factorial(5)", 120.0},
 		// {"isEven = func(n) { if n == 0 { return true } return isOdd(n - 1) }; isOdd = func(n) { if n == 0 { return false } return isEven(n - 1) }; isEven(10)", true},
@@ -1430,17 +1471,17 @@ func main() {
 		// {"result = [] len(result)", 0.0},
 		// {"test = func(arr) { print(arr) }; test([1,2,3])", nil},
 		// {`
-		// map = func(arr, fn) { 
-		// 	result = [] ; 
-		// 	i = 0; 
-		// 	while i < len(arr) { 
-		// 		result = append(result, fn(arr[i])); 
-		// 		i = i + 1 
-		// 	}; 
-		// 	return result 
-		// }; 
-		// map([1, 2, 3], func(x) { 
-		// 	return x * 2 
+		// map = func(arr, fn) {
+		// 	result = [] ;
+		// 	i = 0;
+		// 	while i < len(arr) {
+		// 		result = append(result, fn(arr[i]));
+		// 		i = i + 1
+		// 	};
+		// 	return result
+		// };
+		// map([1, 2, 3], func(x) {
+		// 	return x * 2
 		// })`, []interface{}{2.0, 4.0, 6.0}},
 		// {"filter = func(arr, fn) { result = [] ; for i = 0; i < len(arr); i++ { if fn(arr[i]) { result = append(result, arr[i]) } }; return result }; filter([1, 2, 3, 4], func(x) { return x % 2 == 0 })", []interface{}{2.0, 4.0}},
 		// {"reduce = func(arr, fn, acc) { for i = 0; i < len(arr); i++ { acc = fn(acc, arr[i]) }; return acc }; reduce([1, 2, 3], func(acc, x) { return acc + x }, 0)", 6.0},
