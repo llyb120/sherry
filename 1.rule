@@ -1,11 +1,18 @@
+
+test()
+
 func test() {
 	println("test")
     holy = []
-    append(holy, "1")
+    holy = append(holy, "1")
+    holy[0] = 3
     append(holy, "2")
     append(holy, "3")
-    println(holy)
+    println(holy[0])
+
+    // obj = {
+    //    a: 2
+    //}
+    //println(obj)
 }
 
-
-test()

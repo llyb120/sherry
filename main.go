@@ -673,8 +673,17 @@ func NewEvaluator() *Evaluator {
 
 func (e *Evaluator) evalStatements(stmts []Statement) interface{} {
 	var result interface{}
+	// 先执行函数定义语句
 	for _, statement := range stmts {
-		result = e.Eval(statement)
+		if _, ok := statement.(*FunctionStatement); ok {
+			result = e.Eval(statement)
+		}
+	}
+	// 再执行其他语句
+	for _, statement := range stmts {
+		if _, ok := statement.(*FunctionStatement); !ok {
+			result = e.Eval(statement)
+		}
 	}
 	return result
 }
