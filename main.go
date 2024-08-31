@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 )
 
@@ -680,6 +681,11 @@ func (e *Evaluator) evalInfixExpression(operator string, left, right interface{}
 			if rightVal, ok := right.(string); ok {
 				return leftVal + rightVal
 			}
+		case []interface{}:
+			if rightVal, ok := right.([]interface{}); ok {
+				return append(leftVal, rightVal...)
+			}
+
 		}
 	case "-":
 		if leftVal, ok := left.(float64); ok {
@@ -948,10 +954,56 @@ func (e *Evaluator) evalCallExpression(function interface{}, arguments []Express
 	switch fn := function.(type) {
 	case *FunctionStatement:
 		return e.evalFunctionCall(fn, arguments)
+	case *FunctionLiteral:
+		return e.evalFunctionLiteralCall(fn, arguments)
 	default:
 		return nil
 	}
 }
+
+func (e *Evaluator) evalFunctionLiteralCall(fn *FunctionLiteral, arguments []Expression) interface{} {
+	// 保存当前环境
+	oldEnv := e.env
+
+	// 创建新的局部环境
+	env := make(map[string]interface{})
+
+	// 先将参数值存入局部环境
+	for i, param := range fn.Parameters {
+		if i < len(arguments) {
+			env[param.Value] = e.Eval(arguments[i])
+		} else {
+			env[param.Value] = nil
+		}
+	}
+
+	// 合并外部环境到局部环境
+	for k, v := range oldEnv {
+		if _, exists := env[k]; !exists {
+			env[k] = v
+		}
+	}
+
+	// 设置新的局部环境
+	e.env = env
+
+	// 评估函数体
+	var result interface{}
+	for _, stmt := range fn.Body.Statements {
+		e.Eval(stmt)
+		if returnValue, exists := e.env["__return__"]; exists {
+			// 恢复原环境
+			e.env = oldEnv
+			return returnValue
+		}
+	}
+
+	// 恢复原环境
+	e.env = oldEnv
+
+	return result
+}
+
 func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expression) interface{} {
 	// 保存当前环境
 	oldEnv := e.env
@@ -1096,6 +1148,8 @@ func (e *Evaluator) Eval(node Node) interface{} {
 		return e.evalIndexExpression(left, index)
 	case *Boolean:
 		return node.Value
+	case *FunctionLiteral:
+		return node
 	}
 	return nil
 }
@@ -1253,7 +1307,12 @@ func (p *Parser) parseAssignStatement() *AssignStatement {
 
 	p.nextToken()
 
-	stmt.Value = p.parseExpression(LOWEST)
+	// 支持将函数赋值给变量
+	if p.curToken.Type == TOKEN_FUNC {
+		stmt.Value = p.parseFunctionLiteral()
+	} else {
+		stmt.Value = p.parseExpression(LOWEST)
+	}
 
 	if p.peekTokenIs(TOKEN_SEMICOLON) {
 		p.nextToken()
@@ -1261,6 +1320,33 @@ func (p *Parser) parseAssignStatement() *AssignStatement {
 
 	return stmt
 }
+
+func (p *Parser) parseFunctionLiteral() *FunctionLiteral {
+	lit := &FunctionLiteral{Token: p.curToken}
+
+	if !p.expectPeek(TOKEN_LPAREN) {
+		return nil
+	}
+
+	lit.Parameters = p.parseFunctionParameters()
+
+	if !p.expectPeek(TOKEN_LBRACE) {
+		return nil
+	}
+
+	lit.Body = p.parseBlockStatement()
+
+	return lit
+}
+
+type FunctionLiteral struct {
+	Token      Token
+	Parameters []*Identifier
+	Body       *BlockStatement
+}
+
+func (fl *FunctionLiteral) expressionNode()      {}
+func (fl *FunctionLiteral) TokenLiteral() string { return fl.Token.Value }
 
 type FunctionStatement struct {
 	Token      Token
@@ -1283,7 +1369,7 @@ func main() {
 		input    string
 		expected interface{}
 	}{
-		// {"2 + 3", 5.0},
+		// `{"2 + 3", 5.0},
 		// {"2 - 3", -1.0},
 		// {"2 * 3", 6.0},
 		// {"2 / 3", 2.0 / 3.0},
@@ -1313,8 +1399,8 @@ func main() {
 		// {"2 > 1", true},
 		// {"1 <= 1", true},
 		// {"1 >= 1", true},
-		{"!(true)", false},
-		{"!(false)", true},
+		// {"!(true)", false},
+		// {"!(false)", true},
 		// {"true && true", true},
 		// {"true && false", false},
 		// {"false && true", false},
@@ -1322,7 +1408,19 @@ func main() {
 		// {"true || true", true},
 		// {"true || false", true},
 		// {"false || true", true},
-		// {"false || false", false},
+		// {"false || false", false},`
+
+		// {"factorial = func(n) { if n == 0 { return 1 } return n * factorial(n - 1) }; factorial(5)", 120.0},
+		// {"isEven = func(n) { if n == 0 { return true } return isOdd(n - 1) }; isOdd = func(n) { if n == 0 { return false } return isEven(n - 1) }; isEven(10)", true},
+		// {"sum = func(a, b) { return a + b }; sum(3, 4)", 7.0},
+		// {"max = func(a, b) { if a > b { return a } return b }; max(10, 20)", 20.0},
+		// {"merge = func(a, b) { return a + b }; merge([1, 2], [3, 4])", []interface{}{1.0, 2.0, 3.0, 4.0}},
+		{"result = [] len(result)", 0.0},
+		{"map = func(arr, fn) { result = [] ; i = 0; while i < len(arr) { result = append(result, fn(arr[i])); i = i + 1 }; return result }; map([1, 2, 3], func(x) { return x * 2 })", []interface{}{2.0, 4.0, 6.0}},
+		// {"filter = func(arr, fn) { result = [] ; for i = 0; i < len(arr); i++ { if fn(arr[i]) { result = append(result, arr[i]) } }; return result }; filter([1, 2, 3, 4], func(x) { return x % 2 == 0 })", []interface{}{2.0, 4.0}},
+		// {"reduce = func(arr, fn, acc) { for i = 0; i < len(arr); i++ { acc = fn(acc, arr[i]) }; return acc }; reduce([1, 2, 3], func(acc, x) { return acc + x }, 0)", 6.0},
+		// {"fibonacci = func(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(10)", 55.0},
+		// {"reverse = func(s) { result = \"\"; for i = len(s) - 1; i >= 0; i-- { result = result + s[i] }; return result }; reverse(\"hello\")", "olleh"},
 	}
 
 	for _, tt := range tests {
@@ -1338,11 +1436,12 @@ func main() {
 		}
 		evaluator := NewEvaluator()
 		result := evaluator.Eval(program)
-		if result != tt.expected {
+		if reflect.DeepEqual(result, tt.expected) {
+			fmt.Printf("Test passed: %s\n", tt.input)
+		} else {
 			fmt.Printf("Test failed: %s\n", tt.input)
 			fmt.Printf("Expected: %v, got: %v\n", tt.expected, result)
-		} else {
-			fmt.Printf("Test passed: %s\n", tt.input)
 		}
 	}
+
 }
