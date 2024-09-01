@@ -1,4 +1,4 @@
-package gscript
+package sherry
 
 import (
 	"fmt"
