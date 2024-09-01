@@ -72,6 +72,14 @@ func TestBase(t *testing.T) {
 		{"true || false", true},
 		{"false || true", true},
 		{"false || false", false},
+
+		{"if true { 1 } else if false { 2 } else { 3 }", 1.0},
+		{"if false { 1 } else if true { 2 } else { 3 }", 2.0},
+		{"if false { 1 } else if false { 2 } else { 3 }", 3.0},
+		{"a = 1; if a == 1 { a = 2 } else if a == 2 { a = 3 }; a", 2.0},
+		{"a = 1; if a == 2 { a = 3 } else if a == 1 { a = 4 }; a", 4.0},
+		{"a = 1; if a == 0 { a = 5 } else if a == 1 { a = 6 } else { a = 7 }; a", 6.0},
+
 		{"a += 5", 5.0},
 		{"a = 10; a -= 3", 7.0},
 		{"b = 2; b += 3; b += 4", 9.0},

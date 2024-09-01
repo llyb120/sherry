@@ -22,6 +22,7 @@ const (
 	TOKEN_RBRACE
 	TOKEN_IF
 	TOKEN_ELSE
+	TOKEN_ELSE_IF
 	TOKEN_WHILE
 	TOKEN_FUNC
 	TOKEN_RETURN
@@ -912,10 +913,16 @@ type IfStatement struct {
 	Condition   Expression
 	Consequence *BlockStatement
 	Alternative *BlockStatement
+	ElseIf      []*ElseIfStatement
 }
 
 func (is *IfStatement) statementNode()       {}
 func (is *IfStatement) TokenLiteral() string { return is.Token.Value }
+
+type ElseIfStatement struct {
+	Condition   Expression
+	Consequence *BlockStatement
+}
 
 type WhileStatement struct {
 	Token     Token
@@ -954,15 +961,28 @@ func (p *Parser) parseIfStatement() *IfStatement {
 
 	stmt.Consequence = p.parseBlockStatement()
 
-	if p.peekTokenIs(TOKEN_ELSE) {
-		p.nextToken()
+	for p.peekTokenIs(TOKEN_ELSE) {
+		p.nextToken() // 消费 'else' token
 
-		if !p.expectPeek(TOKEN_LBRACE) {
-			fmt.Println("Error: Expected '{' before else body")
-			return nil
+		if p.peekTokenIs(TOKEN_IF) {
+			p.nextToken() // 消费 'if' token
+			p.nextToken()
+			elseIfStmt := &ElseIfStatement{}
+			elseIfStmt.Condition = p.parseExpression(LOWEST)
+
+			if !p.expectPeek(TOKEN_LBRACE) {
+				return nil
+			}
+
+			elseIfStmt.Consequence = p.parseBlockStatement()
+			stmt.ElseIf = append(stmt.ElseIf, elseIfStmt)
+		} else {
+			if !p.expectPeek(TOKEN_LBRACE) {
+				return nil
+			}
+			stmt.Alternative = p.parseBlockStatement()
+			break // 最后一个 else 后不再有 else if
 		}
-
-		stmt.Alternative = p.parseBlockStatement()
 	}
 
 	return stmt
@@ -1012,7 +1032,17 @@ func (e *Evaluator) evalIfStatement(is *IfStatement) interface{} {
 	condition := e.Eval(is.Condition)
 	if isTruthy(condition) {
 		return e.Eval(is.Consequence)
-	} else if is.Alternative != nil {
+	}
+
+	// 处理 else if 语句
+	for _, elseIf := range is.ElseIf {
+		condition = e.Eval(elseIf.Condition)
+		if isTruthy(condition) {
+			return e.Eval(elseIf.Consequence)
+		}
+	}
+
+	if is.Alternative != nil {
 		return e.Eval(is.Alternative)
 	}
 	return nil
