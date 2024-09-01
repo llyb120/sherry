@@ -744,13 +744,13 @@ func (e *Evaluator) evalStatements(stmts []Statement) interface{} {
 	var result interface{}
 	// 先执行函数定义语句
 	for _, statement := range stmts {
-		if _, ok := statement.(*FunctionStatement); ok {
+		if _, ok := statement.(*FunctionLiteral); ok {
 			result = e.Eval(statement)
 		}
 	}
 	// 再执行其他语句
 	for _, statement := range stmts {
-		if _, ok := statement.(*FunctionStatement); !ok {
+		if _, ok := statement.(*FunctionLiteral); !ok {
 			result = e.Eval(statement)
 		}
 	}
@@ -1073,8 +1073,6 @@ func (e *Evaluator) evalAssignStatement(as *AssignStatement) interface{} {
 
 func (e *Evaluator) evalCallExpression(function interface{}, arguments []Expression) interface{} {
 	switch fn := function.(type) {
-	case *FunctionStatement:
-		return e.evalFunctionCall(fn, arguments)
 	case *FunctionLiteral:
 		return e.evalFunctionLiteralCall(fn, arguments)
 	case func(args ...interface{}) interface{}:
@@ -1136,51 +1134,6 @@ func (e *Evaluator) evalFunctionLiteralCall(fn *FunctionLiteral, arguments []Exp
 				// 保存当前的符号表
 				fn.Env = e.env
 			}
-			// e.env = oldEnv
-			return returnValue
-		}
-	}
-
-	// 恢复原环境
-	// e.env = oldEnv
-
-	return result
-}
-
-func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expression) interface{} {
-	// 保存当前环境
-	// oldEnv := e.env
-
-	// 创建新的局部环境
-	// env := make(map[string]interface{})
-	e.env.Push()
-	defer e.env.Pop()
-
-	// 先将参数值存入局部环境
-	for i, param := range fn.Parameters {
-		if i < len(arguments) {
-			e.env.Set(param.Value, e.Eval(arguments[i]))
-		} else {
-			e.env.Set(param.Value, nil)
-		}
-	}
-
-	// 合并外部环境到局部环境
-	// for k, v := range oldEnv {
-	// 	if _, exists := env[k]; !exists {
-	// 		env[k] = v
-	// 	}
-	// }
-
-	// 设置新的局部环境
-	// e.env = env
-
-	// 评估函数体
-	var result interface{}
-	for _, stmt := range fn.Body.Statements {
-		e.Eval(stmt)
-		if returnValue, exists := e.env.Get("__return__"); exists {
-			// 恢复原环境
 			// e.env = oldEnv
 			return returnValue
 		}
@@ -1282,9 +1235,6 @@ func (e *Evaluator) Eval(node Node) interface{} {
 	case *BreakStatement:
 		e.breakSignal = true
 		return nil
-	case *FunctionStatement:
-		e.env.Set(node.Name.Value, node)
-		return nil
 	case *CallExpression:
 		function := e.Eval(node.Function)
 		if function == nil {
@@ -1308,6 +1258,9 @@ func (e *Evaluator) Eval(node Node) interface{} {
 	case *Boolean:
 		return node.Value
 	case *FunctionLiteral:
+		if node.Name != nil {
+			e.env.Set(node.Name.Value, node)
+		}
 		return node
 	case *AssignExpression:
 		return e.evalAssignExpression(node)
@@ -1438,27 +1391,26 @@ func (e *Evaluator) evalArrayLiteral(node *ArrayLiteral) interface{} {
 	}
 	return elements
 }
-func (p *Parser) parseFunctionStatement() *FunctionStatement { stmt := &FunctionStatement{Token: p.curToken}
+func (p *Parser) parseFunctionStatement() *FunctionLiteral {
+	lit := &FunctionLiteral{Token: p.curToken}
 
-	if !p.expectPeek(TOKEN_IDENT) {
-		return nil
+	if p.expectPeek(TOKEN_IDENT) {
+		lit.Name = &Identifier{Token: p.curToken, Value: p.curToken.Value}
 	}
-
-	stmt.Name = &Identifier{Token: p.curToken, Value: p.curToken.Value}
 
 	if !p.expectPeek(TOKEN_LPAREN) {
 		return nil
 	}
 
-	stmt.Parameters = p.parseFunctionParameters()
+	lit.Parameters = p.parseFunctionParameters()
 
 	if !p.expectPeek(TOKEN_LBRACE) {
 		return nil
 	}
 
-	stmt.Body = p.parseBlockStatement()
+	lit.Body = p.parseBlockStatement()
 
-	return stmt
+	return lit
 }
 
 func (p *Parser) parseFunctionParameters() []*Identifier {
@@ -1609,17 +1561,8 @@ type FunctionLiteral struct {
 }
 
 func (fl *FunctionLiteral) expressionNode()      {}
+func (fl *FunctionLiteral) statementNode()       {}
 func (fl *FunctionLiteral) TokenLiteral() string { return fl.Token.Value }
-
-type FunctionStatement struct {
-	Token      Token
-	Name       *Identifier
-	Parameters []*Identifier
-	Body       *BlockStatement
-}
-
-func (fs *FunctionStatement) statementNode()       {}
-func (fs *FunctionStatement) TokenLiteral() string { return fs.Token.Value }
 
 type CallExpression struct {
 	Token     Token
