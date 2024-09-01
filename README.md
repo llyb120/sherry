@@ -16,8 +16,8 @@ Sherry 是基于GO编写一种简单而灵活的脚本语言，具有动态类�
 package main
 
 func main() {
-	evaluator := NewEvaluator()
-	evaluator.EvalString("println('hello world')")
+    evaluator := NewEvaluator()
+    evaluator.EvalString("println('hello world')")
 }
 ```
 
@@ -39,20 +39,21 @@ f = {
 #### 2. 条件语句
 ```
 if a > b {
-	println('a > b')
+    println('a > b')
 } else if a == b {
-	println('a == b')
+    println('a == b')
 } else {
-	println('a < b')
+    println('a < b')
 }
+```
 
 
 #### 3. 循环语句
 ```
 i = 0
 while i < 10 {
-	println(i)
-	i = i + 1
+    println(i)
+    i = i + 1
 
     if i == 5 {
         break
@@ -66,12 +67,12 @@ while i < 10 {
 ```
 // 直接定义函数
 func add(a, b) {
-	return a + b
+    return a + b
 }
 
 // 使用变量定义
 minus = func(a, b) {
-	return a - b
+    return a - b
 }
 ```
 
@@ -126,4 +127,27 @@ print('hello world')
 ```
 len([1, 2, 3])
 ```
+
+### 自定义函数绑定
+```go
+package main
+
+func main() {
+    evaluator := NewEvaluator()
+    // 绑定变量
+    evaluator.Env.Set("a", 1)
+    evaluator.Env.Set("b", map[string]interface{}{
+        "name": "张三",
+        "age": 18,
+    })
+    // 绑定函数
+    evaluator.Env.Set("test", func(args ...interface{}) []interface{} {
+        for _, arg := range args {
+            fmt.Println(arg)
+        }
+        return Null
+    })
+}
+```
+
 
