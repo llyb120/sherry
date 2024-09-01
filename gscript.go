@@ -695,13 +695,45 @@ var precedences = map[TokenType]int{
 }
 
 type Evaluator struct {
-	env         map[string]interface{}
+	env         Environment
 	breakSignal bool
 }
 
+// 它是一个栈，栈顶是当前环境，栈底是全局环境
+type Environment []map[string]interface{}
+
+func (e *Environment) Set(key string, value interface{}) {
+	if len(*e) == 0 {
+		*e = append(*e, make(map[string]interface{}))
+	}
+	(*e)[len(*e)-1][key] = value
+}
+func (e *Environment) Get(key string) (interface{}, bool) {
+	for i := len(*e) - 1; i >= 0; i-- {
+		if value, ok := (*e)[i][key]; ok {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func (e *Environment) Push() {
+	*e = append(*e, make(map[string]interface{}))
+}
+func (e *Environment) Pop() {
+	*e = (*e)[:len(*e)-1]
+}
+
+// func (e *Environment) SetGlobal(key string, value interface{}) {
+// 	if len(*e) == 0 {
+// 		*e = append(*e, make(map[string]interface{}))
+// 	}
+// 	(*e)[0][key] = value
+// }
+
 func NewEvaluator() *Evaluator {
 	e := &Evaluator{
-		env:         make(map[string]interface{}),
+		env:         make(Environment, 0),
 		breakSignal: false,
 	}
 	RegisterStdLib(e)
@@ -1015,7 +1047,7 @@ func (e *Evaluator) evalBlockStatement(bs *BlockStatement) interface{} {
 }
 
 func (e *Evaluator) evalIdentifier(i *Identifier) interface{} {
-	if val, ok := e.env[i.Value]; ok {
+	if val, ok := e.env.Get(i.Value); ok {
 		return val
 	}
 	return i.Value
@@ -1026,16 +1058,16 @@ func (e *Evaluator) evalAssignStatement(as *AssignStatement) interface{} {
 
 	switch as.Operator {
 	case TOKEN_PLUS_ASSIGN:
-		if existingVal, ok := e.env[as.Name.Value]; ok {
+		if existingVal, ok := e.env.Get(as.Name.Value); ok {
 			val = e.evalInfixExpression("+", existingVal, val)
 		}
 	case TOKEN_MINUS_ASSIGN:
-		if existingVal, ok := e.env[as.Name.Value]; ok {
+		if existingVal, ok := e.env.Get(as.Name.Value); ok {
 			val = e.evalInfixExpression("-", existingVal, val)
 		}
 	}
 
-	e.env[as.Name.Value] = val
+	e.env.Set(as.Name.Value, val)
 	return val
 }
 
@@ -1060,86 +1092,102 @@ func (e *Evaluator) evalCallExpression(function interface{}, arguments []Express
 
 func (e *Evaluator) evalFunctionLiteralCall(fn *FunctionLiteral, arguments []Expression) interface{} {
 	// 保存当前环境
-	oldEnv := e.env
+	// oldEnv := e.env
 
 	// 创建新的局部环境
-	env := make(map[string]interface{})
+	// env := make(map[string]interface{})
+	// 如果闭包自带作用域，则需要恢复
+	if fn.Env != nil {
+		oldEnv := e.env
+		e.env = fn.Env
+		defer func() { e.env = oldEnv }()
+	}
+
+	e.env.Push()
+	defer e.env.Pop()
 
 	// 先将参数值存入局部环境
 	for i, param := range fn.Parameters {
 		if i < len(arguments) {
-			env[param.Value] = e.Eval(arguments[i])
+			e.env.Set(param.Value, e.Eval(arguments[i]))
 		} else {
-			env[param.Value] = nil
+			e.env.Set(param.Value, nil)
 		}
 	}
 
+	// 后面使用一个指针直接指向父作用于，就不需要每次都复制
 	// 合并外部环境到局部环境
-	for k, v := range oldEnv {
-		if _, exists := env[k]; !exists {
-			env[k] = v
-		}
-	}
+	// for k, v := range e.env.GetParentScope() {
+	// 	if _, exists := env[k]; !exists {
+	// 		env[k] = v
+	// 	}
+	// }
 
 	// 设置新的局部环境
-	e.env = env
+	// e.env = env
 
 	// 评估函数体
 	var result interface{}
 	for _, stmt := range fn.Body.Statements {
 		e.Eval(stmt)
-		if returnValue, exists := e.env["__return__"]; exists {
+		if returnValue, exists := e.env.Get("__return__"); exists {
 			// 恢复原环境
-			e.env = oldEnv
+			if fn, ok := returnValue.(*FunctionLiteral); ok {
+				// 保存当前的符号表
+				fn.Env = e.env
+			}
+			// e.env = oldEnv
 			return returnValue
 		}
 	}
 
 	// 恢复原环境
-	e.env = oldEnv
+	// e.env = oldEnv
 
 	return result
 }
 
 func (e *Evaluator) evalFunctionCall(fn *FunctionStatement, arguments []Expression) interface{} {
 	// 保存当前环境
-	oldEnv := e.env
+	// oldEnv := e.env
 
 	// 创建新的局部环境
-	env := make(map[string]interface{})
+	// env := make(map[string]interface{})
+	e.env.Push()
+	defer e.env.Pop()
 
 	// 先将参数值存入局部环境
 	for i, param := range fn.Parameters {
 		if i < len(arguments) {
-			env[param.Value] = e.Eval(arguments[i])
+			e.env.Set(param.Value, e.Eval(arguments[i]))
 		} else {
-			env[param.Value] = nil
+			e.env.Set(param.Value, nil)
 		}
 	}
 
 	// 合并外部环境到局部环境
-	for k, v := range oldEnv {
-		if _, exists := env[k]; !exists {
-			env[k] = v
-		}
-	}
+	// for k, v := range oldEnv {
+	// 	if _, exists := env[k]; !exists {
+	// 		env[k] = v
+	// 	}
+	// }
 
 	// 设置新的局部环境
-	e.env = env
+	// e.env = env
 
 	// 评估函数体
 	var result interface{}
 	for _, stmt := range fn.Body.Statements {
 		e.Eval(stmt)
-		if returnValue, exists := e.env["__return__"]; exists {
+		if returnValue, exists := e.env.Get("__return__"); exists {
 			// 恢复原环境
-			e.env = oldEnv
+			// e.env = oldEnv
 			return returnValue
 		}
 	}
 
 	// 恢复原环境
-	e.env = oldEnv
+	// e.env = oldEnv
 
 	return result
 }
@@ -1235,7 +1283,7 @@ func (e *Evaluator) Eval(node Node) interface{} {
 		e.breakSignal = true
 		return nil
 	case *FunctionStatement:
-		e.env[node.Name.Value] = node
+		e.env.Set(node.Name.Value, node)
 		return nil
 	case *CallExpression:
 		function := e.Eval(node.Function)
@@ -1245,7 +1293,7 @@ func (e *Evaluator) Eval(node Node) interface{} {
 		return e.evalCallExpression(function, node.Arguments)
 	case *ReturnStatement:
 		returnValue := e.Eval(node.ReturnValue)
-		e.env["__return__"] = returnValue
+		e.env.Set("__return__", returnValue)
 		return returnValue
 	case *StringLiteral:
 		return node.Value
@@ -1283,7 +1331,8 @@ func (e *Evaluator) evalAssignExpression(ae *AssignExpression) interface{} {
 	// 处理普通赋值操作
 	switch left := ae.Left.(type) {
 	case *Identifier:
-		e.env[left.Value] = value
+		e.env.Set(left.Value, value)
+		// e.env[left.Value] = value
 	case *DotExpression:
 		return e.evalDotExpressionAssign(left, value, ae.Operator)
 	case *IndexExpression:
@@ -1314,7 +1363,7 @@ func (e *Evaluator) evalIndexExpressionAssign(left *IndexExpression, value inter
 			// 直接追加赋值
 			// if arr, ok := array.([]interface{}); ok {
 			array = append(array, value)
-			e.env[left.Left.(*Identifier).Value] = array
+			e.env.Set(left.Left.(*Identifier).Value, array)
 			// }
 		} else {
 			index := int(e.Eval(left.Index).(float64))
@@ -1324,7 +1373,7 @@ func (e *Evaluator) evalIndexExpressionAssign(left *IndexExpression, value inter
 				array = append(array, nil)
 			}
 			array[index] = value
-			e.env[left.Left.(*Identifier).Value] = array
+			e.env.Set(left.Left.(*Identifier).Value, array)
 			// }
 		}
 	}
@@ -1389,9 +1438,7 @@ func (e *Evaluator) evalArrayLiteral(node *ArrayLiteral) interface{} {
 	}
 	return elements
 }
-
-func (p *Parser) parseFunctionStatement() *FunctionStatement {
-	stmt := &FunctionStatement{Token: p.curToken}
+func (p *Parser) parseFunctionStatement() *FunctionStatement { stmt := &FunctionStatement{Token: p.curToken}
 
 	if !p.expectPeek(TOKEN_IDENT) {
 		return nil
@@ -1555,8 +1602,10 @@ func (de *DotExpression) TokenLiteral() string { return de.Token.Value }
 
 type FunctionLiteral struct {
 	Token      Token
+	Name       *Identifier // 可选，用于命名函数
 	Parameters []*Identifier
 	Body       *BlockStatement
+	Env        Environment
 }
 
 func (fl *FunctionLiteral) expressionNode()      {}
@@ -1579,7 +1628,7 @@ type CallExpression struct {
 }
 
 func RegisterStdLib(e *Evaluator) {
-	e.env["len"] = func(args ...interface{}) interface{} {
+	e.env.Set("len", func(args ...interface{}) interface{} {
 		if len(args) != 1 {
 			return nil
 		}
@@ -1591,8 +1640,8 @@ func RegisterStdLib(e *Evaluator) {
 		default:
 			return nil
 		}
-	}
-	e.env["append"] = func(args ...interface{}) interface{} {
+	})
+	e.env.Set("append", func(args ...interface{}) interface{} {
 		if len(args) < 2 {
 			return nil
 		}
@@ -1604,13 +1653,13 @@ func RegisterStdLib(e *Evaluator) {
 			arr = append(arr, item)
 		}
 		return arr
-	}
-	e.env["print"] = func(args ...interface{}) interface{} {
+	})
+	e.env.Set("print", func(args ...interface{}) interface{} {
 		fmt.Print(args...)
 		return nil
-	}
-	e.env["println"] = func(args ...interface{}) interface{} {
+	})
+	e.env.Set("println", func(args ...interface{}) interface{} {
 		fmt.Println(args...)
 		return nil
-	}
+	})
 }

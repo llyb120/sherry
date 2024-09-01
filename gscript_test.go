@@ -120,7 +120,7 @@ func TestBase(t *testing.T) {
 		{"obj = {a: 2, b: {c: [1, 2, 3]}}; obj.b.c[1]", 2.0},
 		// {"filter = func(arr, fn) { result = [] ; for i = 0; i < len(arr); i++ { if fn(arr[i]) { result = append(result, arr[i]) } }; return result }; filter([1, 2, 3, 4], func(x) { return x % 2 == 0 })", []interface{}{2.0, 4.0}},
 		// {"reduce = func(arr, fn, acc) { for i = 0; i < len(arr); i++ { acc = fn(acc, arr[i]) }; return acc }; reduce([1, 2, 3], func(acc, x) { return acc + x }, 0)", 6.0},
-		// {"fibonacci = func(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(10)", 55.0},
+		{"fibonacci = func(n) { if n <= 1 { return n } return fibonacci(n - 1) + fibonacci(n - 2) }; fibonacci(10)", 55.0},
 		// {"reverse = func(s) { result = \"\"; for i = len(s) - 1; i >= 0; i-- { result = result + s[i] }; return result }; reverse(\"hello\")", "olleh"},
 		{"fn = func(a, b) { return func(c) { return a + b + c } }; fn(1, 2)(3)", 6.0},
 		{
