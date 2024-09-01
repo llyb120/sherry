@@ -170,6 +170,9 @@ func (l *Lexer) NextToken() Token {
 	case '"':
 		tok.Type = TOKEN_STRING
 		tok.Value = l.readString()
+	case '\'':
+		tok.Type = TOKEN_STRING
+		tok.Value = l.readString()
 	case '[':
 		tok = Token{Type: TOKEN_LBRACKET, Value: string(l.ch)}
 	case ']':
@@ -203,7 +206,7 @@ func (l *Lexer) readString() string {
 	position := l.pos + 1
 	for {
 		l.readChar()
-		if l.ch == '"' || l.ch == 0 {
+		if l.ch == '"' || l.ch == '\'' || l.ch == 0 {
 			break
 		}
 	}
@@ -431,14 +434,15 @@ func (p *Parser) parseExpression(precedence int) Expression {
 		if p.peekTokenIs(TOKEN_DOT) {
 			p.nextToken()
 			leftExp = p.parseDotExpression(leftExp)
+		} else if p.peekTokenIs(TOKEN_LBRACKET) {
+			p.nextToken()
+			leftExp = p.parseIndexExpression(leftExp)
 		} else {
 			infix := p.infixParseFns(p.peekToken.Type)
 			if infix == nil {
 				return leftExp
 			}
-
 			p.nextToken()
-
 			leftExp = infix(leftExp)
 		}
 	}
@@ -834,7 +838,6 @@ type AssignExpression struct {
 	Token    Token
 	Left     Expression
 	Value    Expression
-	Append   bool // 新增字段，用于标识是否是直接向数组添加元素
 	Operator TokenType
 }
 
@@ -1271,26 +1274,47 @@ func (e *Evaluator) evalAssignExpression(ae *AssignExpression) interface{} {
 	case *DotExpression:
 		return e.evalDotExpressionAssign(left, value, ae.Operator)
 	case *IndexExpression:
-		array := e.Eval(left.Left)
-		if left.Index == nil {
-			// 直接追加赋值
-			if arr, ok := array.([]interface{}); ok {
-				arr = append(arr, value)
-				e.env[left.Left.(*Identifier).Value] = arr
-			}
-		} else {
-			index := int(e.Eval(left.Index).(float64))
-			if arr, ok := array.([]interface{}); ok {
-				// 确保数组有足够的长度
-				for len(arr) <= index {
-					arr = append(arr, nil)
-				}
-				arr[index] = value
-				e.env[left.Left.(*Identifier).Value] = arr
-			}
-		}
+		return e.evalIndexExpressionAssign(left, value, ae.Operator)
 	}
 
+	return value
+}
+
+func (e *Evaluator) evalIndexExpressionAssign(left *IndexExpression, value interface{}, operator TokenType) interface{} {
+	array := e.Eval(left.Left)
+	switch array := array.(type) {
+	case map[string]interface{}:
+		key, ok := e.Eval(left.Index).(string)
+		if !ok {
+			return nil
+		}
+		switch operator {
+		case TOKEN_ASSIGN:
+			array[key] = value
+		case TOKEN_PLUS_ASSIGN:
+			array[key] = e.evalInfixExpression("+", array[key], value)
+		case TOKEN_MINUS_ASSIGN:
+			array[key] = e.evalInfixExpression("-", array[key], value)
+		}
+	case []interface{}:
+		if left.Index == nil {
+			// 直接追加赋值
+			// if arr, ok := array.([]interface{}); ok {
+			array = append(array, value)
+			e.env[left.Left.(*Identifier).Value] = array
+			// }
+		} else {
+			index := int(e.Eval(left.Index).(float64))
+			// if arr, ok := array.([]interface{}); ok {
+			// 确保数组有足够的长度
+			for len(array) <= index {
+				array = append(array, nil)
+			}
+			array[index] = value
+			e.env[left.Left.(*Identifier).Value] = array
+			// }
+		}
+	}
 	return value
 }
 
@@ -1626,7 +1650,9 @@ func main() {
 		{"obj = {x: 10, y: 20}; obj.z = 30; obj.z", 30.0},
 		{"obj = {x: 10}; obj.x += 5; obj.x", 15.0},
 		{"obj = {x: 10}; obj.x -= 3; obj.x", 7.0},
-
+		{`obj = {x: 10}; obj["x"] -= 3; obj["x"]`, 7.0},
+		{`obj = {x: 10}; obj['x'] += 3; obj['x']`, 13.0},
+		{`obj = {x: 10}; obj[x] += 4; obj[x]`, 14.0},
 		{"obj = {x: 10}; obj = {y: 20}; obj.x", nil},
 		{"obj = {x: 10}; obj = {x: 30}; obj.x", 30.0},
 		{"obj = {a: 2, b: {c: [1, 2, 3]}}; obj.b.c[1]", 2.0},
